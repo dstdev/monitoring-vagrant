@@ -1,0 +1,293 @@
+---
+- hosts: all
+  vars:
+    node_exporter_enabled_collectors:
+      - systemd
+      - textfile:
+          directory: /var/lib/node_exporter/textfile_collector
+      - processes
+      - filesystem:
+          ignored-fs-types: "^(autofs|binfmt_misc|bpf|cgroup2?|configfs|debugfs|devpts|devtmpfs|fusectl|hugetlbfs|iso9660|mqueue|nsfs|overlay|proc|procfs|pstore|rpc_pipefs|securityfs|selinuxfs|squashfs|sysfs|tracefs|fuse\\.quobyte|nfs|beegfs)$"
+  roles:
+    - prometheus.prometheus.node_exporter
+
+- name: Main Server Install
+  # hosts: headnodes
+  hosts: all
+  vars:
+    vault_opsgenie_api_key: "<opsgenie api key>"
+    vault_grafana_password: "admin"
+    prometheus_exporter_uid: 460
+  roles:
+    - role: prometheus.prometheus.alertmanager
+      vars:
+        alertmanager_cluster:
+          peers:
+            - localhost:9094
+          listen-address: 0.0.0.0:9094
+        alertmanager_opsgenie_api_key: "{{ vault_opsgenie_api_key }}"
+        alertmanager_receivers:
+          - name: 'default-receiver'
+          - name: opsgenie
+            opsgenie_configs:
+              - priority: '{% raw %}{{ if .CommonAnnotations.priority }}{{ .CommonAnnotations.priority}}{{ else }}P3{{ end }}{% endraw %}'
+                description: '{% raw %}{{ .CommonAnnotations.description }}{% endraw %}'
+                responders:
+                  - name: "UTHSCSA"
+                    type: "team"
+          - name: heartbeat
+            webhook_configs:
+              - send_resolved: true
+                url: https://api.opsgenie.com/v2/heartbeats/somethingnew/ping
+                http_config:
+                  basic_auth:
+                    password: "{{ vault_opsgenie_api_key }}"
+
+        alertmanager_route:
+          receiver: 'default-receiver'
+          routes:
+          - match:
+              alertname: Watchdog
+            repeat_interval: 60s
+            receiver: heartbeat
+          - receiver: opsgenie
+            group_by: [...]
+
+
+    - role: prometheus.prometheus.prometheus
+      vars:
+        prometheus_alertmanager_config:
+          - scheme: http
+            static_configs:
+              - targets: ["127.0.0.1:9093"]
+        prometheus_targets:
+          node_storage:
+            - targets:
+                - 127.0.0.1:9100
+              labels:
+                env: prod
+          node_service:
+            - targets:
+                - 127.0.0.1:9100
+              labels:
+                env: prod
+          node_compute:
+            - targets:
+                - 127.0.0.1:9100
+              labels:
+                env: prod
+          dcgm:
+            - targets:
+                - 127.0.0.1:9400
+              labels:
+                env: prod
+          blackbox_icmp:
+            - targets:
+                - 127.0.0.1
+                - localhost
+                - 8.8.8.8
+                - 192.168.1.1
+              labels:
+                env: prod
+          blackbox_ssh:
+            - targets:
+                - localhost
+              labels:
+                env: prod
+          blackbox_dns:
+            - targets:
+              - 8.8.8.8
+              - 8.8.4.4
+              labels:
+                env: prod
+          slurm:
+            - targets:
+                - localhost:9200
+              labels:
+                env: prod
+          infiniband:
+            - targets:
+                - localhost:9683
+              labels:
+                env: prod
+          zfs:
+            - targets:
+                - localhost:9134
+              labels:
+                env: prod
+
+        prometheus_scrape_configs:
+          - job_name: "prometheus"
+            metrics_path: "{{ prometheus_metrics_path }}"
+            static_configs:
+              - targets:
+                  - "localhost:9090"
+          - job_name: "node_service"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/node_service.yml"
+          - job_name: "node_compute"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/node_compute.yml"
+          - job_name: "node_storage"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/node_storage.yml"
+          - job_name: "smartctl"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/smartctl.yml"
+
+          - job_name: "zfs"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/zfs.yml"
+          - job_name: "infiniband"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/infiniband.yml"
+          - job_name: "dcgm"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/dcgm.yml"
+          - job_name: "blackbox_icmp"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/blackbox_icmp.yml"
+            params:
+              module: [icmp]
+            metrics_path: "/probe"
+            relabel_configs:
+              - source_labels: [__address__]
+                target_label: __param_target
+              - source_labels: [__param_target]
+                target_label: instance
+              - target_label: __address__
+                replacement: "localhost:9115"
+
+          - job_name: slurm
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/slurm.yml"
+            
+
+          - job_name: "blackbox_ssh"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/blackbox_ssh.yml"
+            params:
+              module: [ssh_banner]
+            metrics_path: "/probe"
+            relabel_configs:
+              - source_labels: [__address__]
+                regex: (.*?)(:.*)?
+                replacement: ${1}:22
+                target_label: __param_target
+              - source_labels: [__param_target]
+                target_label: instance
+              - target_label: __address__
+                replacement: "localhost:9115"
+          - job_name: "blackbox_dns"
+            file_sd_configs:
+              - files:
+                  - "{{ prometheus_config_dir }}/file_sd/blackbox_dns.yml"
+            params:
+              module: [dns_test]
+            metrics_path: "/probe"
+            relabel_configs:
+              - source_labels: [__address__]
+                target_label: __param_target
+              - source_labels: [__param_target]
+                target_label: instance
+              - target_label: __address__
+                replacement: "localhost:9115"
+    - role: prometheus.prometheus.blackbox_exporter
+      vars:
+        blackbox_exporter_configuration_modules:
+          icmp:
+            prober: icmp
+            timeout: 5s
+            icmp:
+              preferred_ip_protocol: ip4
+          http_2xx:
+            prober: http
+            timeout: 5s
+            http:
+              method: GET
+              valid_status_codes: []
+          ssh_banner:
+            prober: tcp
+            timeout: 5s
+            tcp:
+              query_response:
+                - expect: "^SSH-2.0-"
+          dns_test:
+            prober: dns
+            timeout: 5s
+            dns:
+              transport_protocol: "udp"
+              preferred_ip_protocol: "ip4"
+              query_name: "www.google.com"
+              query_type: "A"
+              valid_rcodes:
+                - NOERROR
+
+    - role: grafana.grafana.grafana
+      vars:
+        grafana_alerting: {}
+        grafana_security:
+          admin_user: admin
+          admin_password: "{{ vault_grafana_password }}"
+        grafana_datasources:
+          - name: prometheus
+            type: prometheus
+            url: 'http://localhost:9090'
+        grafana_dashboards:
+          # Node exporter
+          - dashboard_id: 1860
+            revision_id: 33
+            datasource: prometheus
+          # Alertmanager
+          - dashboard_id: 9578
+            revision_id: 4
+            datasource: prometheus
+          #zfs exporter
+          - dashboard_id: 12586
+            revision_id: 1
+            datasource: prometheus
+          # Infiniband detailed
+          - dashboard_id: 14992
+            revision_id: 2
+            datasource: prometheus
+          # Infiniband overview
+          - dashboard_id: 14991
+            revision_id: 2
+            datasource: prometheus
+          # Slurm exporter
+          - dashboard_id: 4323
+            revision_id: 3
+            datasource: prometheus
+        grafana_server:
+          enforce_domain: false
+          socket: ""
+          enable_gzip: false
+          static_root_path: public
+          router_logging: false
+          serve_from_sub_path: false
+
+    - prometheus_slurm_exporter
+    - prometheus_zfs_exporter
+
+    # There is an rpm now for the ib exporter we will need to rewrite the role to use
+    - prometheus_infiniband_exporter
+
+- name: Copy down alet rules
+  hosts: headnodes
+  hosts: all
+  tasks:
+    - ansible.builtin.get_url:
+        url: https://raw.githubusercontent.com/dstdev/ansible-roles/development/prometheus-server/files/alert-dst.rules
+        dest: /etc/prometheus/rules/alert-dst.rules
+        owner: root
+        group: root

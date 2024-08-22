@@ -1,0 +1,6 @@
+---
+# Collections to install
+collections:
+  - grafana.grafana
+  - prometheus.prometheus
+  - community.grafana
