@@ -18,6 +18,8 @@
     vault_opsgenie_api_key: "<opsgenie api key>"
     vault_grafana_password: "admin"
     prometheus_exporter_uid: 460
+    opsgenie_team: "UTHSCSA"
+    opsgenie_heartbeat: "somethingnew"
   roles:
     - role: prometheus.prometheus.alertmanager
       vars:
@@ -33,12 +35,12 @@
               - priority: '{% raw %}{{ if .CommonAnnotations.priority }}{{ .CommonAnnotations.priority}}{{ else }}P3{{ end }}{% endraw %}'
                 description: '{% raw %}{{ .CommonAnnotations.description }}{% endraw %}'
                 responders:
-                  - name: "UTHSCSA"
+                  - name: "{{ opsgenie_team }}"
                     type: "team"
           - name: heartbeat
             webhook_configs:
               - send_resolved: true
-                url: https://api.opsgenie.com/v2/heartbeats/somethingnew/ping
+                url: "https://api.opsgenie.com/v2/heartbeats/{{ opsgenie_heartbeat }}/ping"
                 http_config:
                   basic_auth:
                     password: "{{ vault_opsgenie_api_key }}"

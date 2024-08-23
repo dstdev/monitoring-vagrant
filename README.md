@@ -13,6 +13,8 @@ Once the vm is up, ssh into it `vagrant ssh`
 cd /vagrant
 # Install git
 sudo yum install git
+# Install the codeready builder
+sudo dnf config-manager --set-enabled crb
 # Create a python virtual environment to install ansible and other 
 # dependencies into
 python3 -m venv venv
@@ -33,4 +35,7 @@ echo "localhost" >> inventory.cfg
 # -i inventory.cfg # Must define the inventory file in the absence of a ansible.cfg
 # monitoring.yaml # The monitoring install playbook
 ansible-playbook -b -c local -i inventory.cfg monitoring.yaml
+# Stop the firewall to access the web interfaces
+systemctl stop firewalld
+systemctl disable firewalld
 ```
